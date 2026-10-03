@@ -7,17 +7,12 @@
 #include <zephyr/sys/printk.h>
 #include <inttypes.h>
 #include <stdlib.h>
+#include <string.h>
 #include <zephyr/timing/timing.h>
+#include "TimeParser.h"
 
 
-// error codes
-#define COMMAND_OK			0
-#define TIME_LEN_ERROR      -1
-#define TIME_ARRAY_ERROR    -2
-#define TIME_VALUE_ERROR    -3
-
-// Parser
-int time_parse(char *command);
+// Tehtävään toteutettu Yksinkertaiset testit ja parseri sulautetussa ohjelmassa sekä Lisätään testikeissejä
 
 // Thread initializations
 #define STACKSIZE 500
@@ -44,14 +39,16 @@ volatile int last_state = 0;
 static const struct device *const uart_dev = DEVICE_DT_GET(UART_DEVICE_NODE);
 
 // Condition Variables
-K_MUTEX_DEFINE(red_mutex);
-K_CONDVAR_DEFINE(red_signal);
+K_SEM_DEFINE(red_signal, 0, 1);
 K_MUTEX_DEFINE(yellow_mutex);
 K_CONDVAR_DEFINE(yellow_signal);
 K_MUTEX_DEFINE(green_mutex);
 K_CONDVAR_DEFINE(green_signal);
 K_MUTEX_DEFINE(release_mutex);
 K_CONDVAR_DEFINE(release_signal);
+
+static void red_timer_expiry(struct k_timer *timer);
+K_TIMER_DEFINE(red_delay_timer, red_timer_expiry, NULL);
 
 // Create dispatcher FIFO buffer
 K_FIFO_DEFINE(dispatcher_fifo);
@@ -213,14 +210,32 @@ static void dispatcher_task(void *unused1, void *unused2, void *unused3)
                 if (debug_enabled) {
                         printk("Dispatcher received: %s\n", sequence);
                 }
+
+				bool is_color_sequence = sequence[0] != '\0';
+				for (size_t i = 0; sequence[i] != '\0'; ++i) {
+					if (sequence[i] != 'D' && sequence[i] != 'R' &&
+					    sequence[i] != 'G' && sequence[i] != 'Y') {
+						is_color_sequence = false;
+						break;
+					}
+				}
+
+				if (!is_color_sequence && sequence[0] != '\0') {
+					int delay_seconds = time_parse(sequence);
+					if (delay_seconds < 0) {
+						printk("Invalid time (%d)\n", delay_seconds);
+						continue;
+					}
+
+					k_timer_start(&red_delay_timer, K_SECONDS(delay_seconds), K_NO_WAIT);
+					printk("Red LED scheduled in %d seconds\n", delay_seconds);
+					continue;
+				}
                 
                 total_UART_time = 0;
                 int cnt = 0;
 
                 while (sequence[cnt] != 0) {
-
-						//if (sequence[cnt[0]] == '0'){
-
 
                          if (sequence[cnt] == 'D'){
                                 debug_enabled = !debug_enabled;
@@ -232,7 +247,7 @@ static void dispatcher_task(void *unused1, void *unused2, void *unused3)
                                 if (debug_enabled) {
                                         printk("Red ");
                                 }
-                                k_condvar_broadcast(&red_signal);
+							k_sem_give(&red_signal);
                         }
                         if (sequence[cnt] == 'G'){
                                 if (debug_enabled) {
@@ -248,7 +263,7 @@ static void dispatcher_task(void *unused1, void *unused2, void *unused3)
                         }
                         cnt++;
                         k_condvar_wait(&release_signal, &release_mutex, K_FOREVER);
-                }
+               // }
         // You need to:
         // Parse color and time from the fifo data
         // Example
@@ -258,6 +273,13 @@ static void dispatcher_task(void *unused1, void *unused2, void *unused3)
         // Send the parsed color information to tasks using fifo
         // Use release signal to control sequence or k_yield
 	}
+}
+}
+
+static void red_timer_expiry(struct k_timer *timer)
+{
+	ARG_UNUSED(timer);
+	k_sem_give(&red_signal);
 }
 
 
@@ -317,7 +339,7 @@ void red_led_task(void *, void *, void*) {
 
 
 	while (true) {
-                k_condvar_wait(&red_signal, &red_mutex, K_FOREVER);
+				k_sem_take(&red_signal, K_FOREVER);
 
                 timing_start();
                 timing_t start_time = timing_counter_get();
@@ -436,9 +458,9 @@ void debug_task(void *, void *, void*) {
 	while (true) {
 
 		received = k_fifo_get(&data_fifo, K_FOREVER);
-                //if (debug_enabled) {
+                if (debug_enabled) {
 		printk("Debug received from %s: %" PRIu64 " | Total time: %" PRIu64 "\n", received->sender, received->task_time, received->total_time);
-               // }
+                }
 		k_free(received);
 
 		k_yield();
@@ -447,38 +469,4 @@ void debug_task(void *, void *, void*) {
 
 
 
-int time_parse(char *time) {
-
-	// how many seconds, default returns error
-
-	int seconds = TIME_LEN_ERROR;
-
-	// Check that string is not null
-
-	if (time == NULL) {
-		return TIME_ARRAY_ERROR;
-	}
-
-	// Parse values from time string
-
-    int values[3];
-	values[2] = atoi(time+4); // seconds
-	time[4] = 0;
-	values[1] = atoi(time+2); // minutes
-	time[2] = 0;
-	values[0] = atoi(time); // hours
-	// Now you have:
-	// values[0] hour
-	// values[1] minute
-	// values[2] second
-
-	// Boundary check
-
-	if (values[0] < 0 || values[0] > 23 || values[1] < 0 || values[1] > 59 || values[2] < 0 || values[2] > 59) {
-		return TIME_VALUE_ERROR;
-	}
-
-	seconds = values[0] * 3600 + values[1] * 60 + values[2];
-	return seconds;
-}
 
