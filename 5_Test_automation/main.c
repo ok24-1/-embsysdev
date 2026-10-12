@@ -12,7 +12,7 @@
 #include "TimeParser.h"
 
 
-// Tehtävään toteutettu Yksinkertaiset testit ja parseri sulautetussa ohjelmassa sekä Lisätään testikeissejä
+// Tehtävään toteutettu Aikamerkkijono robotista, Lisätään aikamerkkijonon testikeissejä sekä Debug-tietoa robotille
 
 // Thread initializations
 #define STACKSIZE 500
